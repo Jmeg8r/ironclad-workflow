@@ -174,14 +174,36 @@ function runLint() {
 }
 
 function runAudit() {
-  const result = runCommand('npm audit --audit-level=high 2>&1', 'Running security audit');
-  
-  const output = result.output || '';
-  const hasHighCritical = output.includes('high') || output.includes('critical');
-  
+  // Use --json for a machine-readable report. Note: no `2>&1` here — merging
+  // stderr would corrupt the JSON. npm audit exits non-zero when vulns exist,
+  // so runCommand() captures the report on error.output either way.
+  const result = runCommand('npm audit --json', 'Running security audit');
+  const raw = result.output || '';
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    parsed = null;
+  }
+
+  // No machine-readable report (e.g. no lockfile / ENOLOCK). Report as
+  // inconclusive and surface it in the summary — never a silent pass on a
+  // substring match, never a hard fail that breaks a legitimately dep-free repo.
+  if (!parsed || parsed.error || !parsed.metadata || !parsed.metadata.vulnerabilities) {
+    const reason = parsed && parsed.error
+      ? (parsed.error.code || parsed.error.summary || 'audit error')
+      : 'could not parse npm audit output';
+    return { success: true, inconclusive: true, reason: reason, vulnerabilities: null };
+  }
+
+  const counts = parsed.metadata.vulnerabilities;
+  const high = counts.high || 0;
+  const critical = counts.critical || 0;
+
   return {
-    success: !hasHighCritical || result.success,
-    output: output.substring(0, 500)
+    success: high === 0 && critical === 0,
+    vulnerabilities: counts
   };
 }
 
@@ -361,7 +383,18 @@ async function main() {
   console.log('Files hashed:    ' + verifyState.summary.filesHashed);
   console.log('Tests:           ' + (verifyState.summary.testsPass ? 'PASS' : 'FAIL'));
   console.log('Lint:            ' + (verifyState.summary.lintPass ? 'PASS' : 'FAIL'));
-  console.log('Security Audit:  ' + (verifyState.summary.auditPass ? 'PASS' : 'FAIL'));
+
+  const auditLabel = auditResults.inconclusive
+    ? 'INCONCLUSIVE (' + auditResults.reason + ')'
+    : (verifyState.summary.auditPass ? 'PASS' : 'FAIL');
+  console.log('Security Audit:  ' + auditLabel);
+  if (auditResults.vulnerabilities) {
+    const v = auditResults.vulnerabilities;
+    console.log('  Vulnerabilities: ' + (v.critical || 0) + ' critical, ' +
+                (v.high || 0) + ' high, ' + (v.moderate || 0) + ' moderate, ' +
+                (v.low || 0) + ' low');
+  }
+
   console.log('AI Review:       ' + (verifyState.summary.aiReviewPass ? 'PASS' : 'NEEDS ATTENTION'));
   
   if (aiReviewResults.securityRisk) {
