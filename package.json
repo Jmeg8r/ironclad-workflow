@@ -23,6 +23,9 @@
     "type": "git",
     "url": "https://github.com/As-The-Geek-Learns/ironclad-workflow.git"
   },
-  "author": "",
-  "license": "MIT"
+  "author": "James Cruce (As The Geek Learns)",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16"
+  }
 }

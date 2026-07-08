@@ -1,6 +1,6 @@
 {
   "version": "1.1.0",
-  "timestamp": "2026-01-19T19:15:16.982Z",
+  "timestamp": "2026-07-08T21:56:54.246Z",
   "files": {
     "count": 2,
     "hashes": {
@@ -18,14 +18,12 @@
   },
   "audit": {
     "success": true,
-    "output": "npm error code ENOLOCK\nnpm error audit This command requires an existing lockfile.\nnpm error audit Try creating one first with: npm i --package-lock-only\nnpm error audit Original error: loadVirtual requires existing shrinkwrap file\nnpm error A complete log of this run can be found in: /Users/jamescruce/.npm/_logs/2026-01-19T19_15_16_352Z-debug-0.log"
+    "inconclusive": true,
+    "reason": "ENOLOCK",
+    "vulnerabilities": null
   },
   "aiReview": {
-    "success": true,
-    "securityRisk": "UNKNOWN",
-    "codeQuality": "UNKNOWN",
-    "securityIssues": 0,
-    "qualityIssues": 0
+    "skipped": true
   },
   "summary": {
     "filesHashed": 2,

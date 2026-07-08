@@ -28,8 +28,18 @@ const path = require('path');
 const { execSync, execFileSync, spawn } = require('child_process');
 
 // Configuration
-const DEFAULT_EXTENSIONS = ['.js', '.jsx', '.ts', '.tsx', '.css', '.json'];
+// WHAT: Extensions hashed for integrity tracking.
+// WHY: Broader than the AI-review set (ai-review.js) on purpose — hashing
+//      guards ALL source + asset files that shipping depends on (incl. .css
+//      and .json), whereas AI review only sends actual code to the model.
+const DEFAULT_EXTENSIONS = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.css', '.json'];
 const OUTPUT_PATH = '.workflow/state/verify-state.json';
+
+// WHAT: Per-command wall-clock limit and output cap for spawned tools.
+// WHY: Tests/lint/audit had no timeout and could hang the whole verification
+//      indefinitely. Overridable via VERIFY_CMD_TIMEOUT_MS for slow suites.
+const CMD_TIMEOUT_MS = parseInt(process.env.VERIFY_CMD_TIMEOUT_MS, 10) || 300000; // 5 minutes
+const CMD_MAX_BUFFER = 10 * 1024 * 1024; // 10 MB
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -92,16 +102,24 @@ function findFiles(baseDir) {
 function runCommand(command, description) {
   console.log('\n' + description + '...');
   try {
-    const output = execSync(command, { 
+    const output = execSync(command, {
       encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: CMD_TIMEOUT_MS,
+      maxBuffer: CMD_MAX_BUFFER
     });
     return { success: true, output: output.trim() };
   } catch (error) {
-    return { 
-      success: false, 
+    // A timeout kill surfaces as code 'ETIMEDOUT' (or a SIGTERM signal);
+    // make that explicit rather than reporting an empty error.
+    const timedOut = error.code === 'ETIMEDOUT' || error.signal === 'SIGTERM';
+    const message = timedOut
+      ? 'Command timed out after ' + CMD_TIMEOUT_MS + 'ms: ' + command
+      : (error.stderr ? error.stderr.trim() : error.message);
+    return {
+      success: false,
       output: error.stdout ? error.stdout.trim() : '',
-      error: error.stderr ? error.stderr.trim() : error.message
+      error: message
     };
   }
 }
@@ -156,15 +174,79 @@ function runLint() {
 }
 
 function runAudit() {
-  const result = runCommand('npm audit --audit-level=high 2>&1', 'Running security audit');
-  
-  const output = result.output || '';
-  const hasHighCritical = output.includes('high') || output.includes('critical');
-  
+  // Use --json for a machine-readable report. Note: no `2>&1` here — merging
+  // stderr would corrupt the JSON. npm audit exits non-zero when vulns exist,
+  // so runCommand() captures the report on error.output either way.
+  const result = runCommand('npm audit --json', 'Running security audit');
+  const raw = result.output || '';
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    parsed = null;
+  }
+
+  // No machine-readable report (e.g. no lockfile / ENOLOCK). Report as
+  // inconclusive and surface it in the summary — never a silent pass on a
+  // substring match, never a hard fail that breaks a legitimately dep-free repo.
+  if (!parsed || parsed.error || !parsed.metadata || !parsed.metadata.vulnerabilities) {
+    const reason = parsed && parsed.error
+      ? (parsed.error.code || parsed.error.summary || 'audit error')
+      : 'could not parse npm audit output';
+    return { success: true, inconclusive: true, reason: reason, vulnerabilities: null };
+  }
+
+  const counts = parsed.metadata.vulnerabilities;
+  const high = counts.high || 0;
+  const critical = counts.critical || 0;
+
   return {
-    success: !hasHighCritical || result.success,
-    output: output.substring(0, 500)
+    success: high === 0 && critical === 0,
+    vulnerabilities: counts
   };
+}
+
+const AI_RESULT_PATH = '.workflow/state/ai-review.json';
+
+// WHAT: Read and normalize ai-review.js output into a summary object.
+// WHY: Returns null when the file is absent or malformed so the caller can
+//      distinguish "no fresh review" from a real verdict (see runAiReview).
+function readAiResults(resultPath) {
+  if (!fs.existsSync(resultPath)) {
+    return null;
+  }
+  try {
+    const aiResults = JSON.parse(fs.readFileSync(resultPath, 'utf-8'));
+    if (!aiResults || !aiResults.summary) {
+      return null;
+    }
+    return {
+      success: aiResults.summary.passesReview,
+      securityRisk: aiResults.summary.securityRisk,
+      codeQuality: aiResults.summary.codeQuality,
+      securityIssues: aiResults.securityReview?.issues?.length || 0,
+      qualityIssues: aiResults.qualityReview?.issues?.length || 0,
+      needsAttention: !aiResults.summary.passesReview
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+// WHAT: Minimal environment for the ai-review child process.
+// WHY: Don't hand the child every secret in the parent environment. It only
+//      needs PATH (to find git), HOME, and the Gemini key. SystemRoot/TEMP/TMP
+//      are included so Node itself still works on Windows.
+function buildAiChildEnv() {
+  const keys = ['PATH', 'HOME', 'GEMINI_API_KEY', 'SystemRoot', 'TEMP', 'TMP'];
+  const env = {};
+  for (const key of keys) {
+    if (process.env[key] !== undefined) {
+      env[key] = process.env[key];
+    }
+  }
+  return env;
 }
 
 function runAiReview() {
@@ -172,73 +254,63 @@ function runAiReview() {
     console.log('Skipping AI review (--skip-ai-review)');
     return { skipped: true };
   }
-  
+
   // Check for API key
   if (!process.env.GEMINI_API_KEY) {
     console.log('No GEMINI_API_KEY set, skipping AI review');
     console.log('Set with: export GEMINI_API_KEY="your-key"');
     return { skipped: true, reason: 'no API key' };
   }
-  
+
   // Check if ai-review.js exists
   const aiReviewPath = path.join(__dirname, 'ai-review.js');
   if (!fs.existsSync(aiReviewPath)) {
     console.log('AI review script not found');
     return { skipped: true, reason: 'script not found' };
   }
-  
+
+  // WHAT: Delete any prior review result before running.
+  // WHY: ai-review.js can exit 0 without writing a file (e.g. "no code found
+  //      to review"). Without this, verify.js would read a STALE result from a
+  //      previous run and misattribute it to the current code.
+  try {
+    if (fs.existsSync(AI_RESULT_PATH)) {
+      fs.unlinkSync(AI_RESULT_PATH);
+    }
+  } catch (e) {
+    console.warn('Warning: could not clear previous AI review result: ' + e.message);
+  }
+
   console.log('\nRunning AI Code Review (Gemini)...');
-  
+
+  let spawnError = null;
   try {
     const aiArgs = options.securityFocus ? ['--security-focus'] : [];
     // Use execFileSync to avoid shell interpretation of the path
-    const result = execFileSync(process.execPath, [aiReviewPath, ...aiArgs], {
+    execFileSync(process.execPath, [aiReviewPath, ...aiArgs], {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env,
+      env: buildAiChildEnv(),
       timeout: 120000 // 2 minute timeout
     });
-    
-    // Read the AI review results
-    const aiResultPath = '.workflow/state/ai-review.json';
-    if (fs.existsSync(aiResultPath)) {
-      const aiResults = JSON.parse(fs.readFileSync(aiResultPath, 'utf-8'));
-      return {
-        success: aiResults.summary.passesReview,
-        securityRisk: aiResults.summary.securityRisk,
-        codeQuality: aiResults.summary.codeQuality,
-        securityIssues: aiResults.securityReview?.issues?.length || 0,
-        qualityIssues: aiResults.qualityReview?.issues?.length || 0
-      };
-    }
-    
-    return { success: true, output: result };
   } catch (error) {
+    // ai-review.js exits non-zero when it finds issues that need attention;
+    // that is expected, not a spawn failure. Distinguish below by whether a
+    // fresh result file was written.
+    spawnError = error;
     console.log('AI review completed with findings');
-    
-    // Still try to read results even if exit code was non-zero
-    const aiResultPath = '.workflow/state/ai-review.json';
-    if (fs.existsSync(aiResultPath)) {
-      try {
-        const aiResults = JSON.parse(fs.readFileSync(aiResultPath, 'utf-8'));
-        return {
-          success: aiResults.summary.passesReview,
-          securityRisk: aiResults.summary.securityRisk,
-          codeQuality: aiResults.summary.codeQuality,
-          securityIssues: aiResults.securityReview?.issues?.length || 0,
-          qualityIssues: aiResults.qualityReview?.issues?.length || 0,
-          needsAttention: !aiResults.summary.passesReview
-        };
-      } catch (e) {
-        // Ignore parse errors
-      }
-    }
-    
-    return {
-      success: false,
-      error: error.message
-    };
   }
+
+  const results = readAiResults(AI_RESULT_PATH);
+  if (results) {
+    return results;
+  }
+
+  // No fresh result file was written. Do NOT fall back to stale data.
+  if (spawnError) {
+    return { success: false, error: spawnError.message, reason: 'ai-review produced no output' };
+  }
+  return { skipped: true, reason: 'no review output' };
 }
 
 // Main verification process
@@ -311,7 +383,18 @@ async function main() {
   console.log('Files hashed:    ' + verifyState.summary.filesHashed);
   console.log('Tests:           ' + (verifyState.summary.testsPass ? 'PASS' : 'FAIL'));
   console.log('Lint:            ' + (verifyState.summary.lintPass ? 'PASS' : 'FAIL'));
-  console.log('Security Audit:  ' + (verifyState.summary.auditPass ? 'PASS' : 'FAIL'));
+
+  const auditLabel = auditResults.inconclusive
+    ? 'INCONCLUSIVE (' + auditResults.reason + ')'
+    : (verifyState.summary.auditPass ? 'PASS' : 'FAIL');
+  console.log('Security Audit:  ' + auditLabel);
+  if (auditResults.vulnerabilities) {
+    const v = auditResults.vulnerabilities;
+    console.log('  Vulnerabilities: ' + (v.critical || 0) + ' critical, ' +
+                (v.high || 0) + ' high, ' + (v.moderate || 0) + ' moderate, ' +
+                (v.low || 0) + ' low');
+  }
+
   console.log('AI Review:       ' + (verifyState.summary.aiReviewPass ? 'PASS' : 'NEEDS ATTENTION'));
   
   if (aiReviewResults.securityRisk) {

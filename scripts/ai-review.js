@@ -28,6 +28,15 @@ const GEMINI_MODEL = 'gemini-2.5-flash'; // Updated model name for 2026
 const OUTPUT_PATH = '.workflow/state/ai-review.json';
 const MAX_FILE_SIZE = 50000; // Characters per file
 
+// Only these code extensions are ever sent to the model — no .css/.json (they
+// add little to a security/quality review). Applied to BOTH auto-discovery and
+// explicit --files input, so a caller can't smuggle e.g. secrets.json past it.
+const REVIEWABLE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.py', '.go', '.rs']);
+
+function isReviewableSourceFile(filePath) {
+  return REVIEWABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
 // Parse command line arguments
 const args = process.argv.slice(2);
 const options = {
@@ -139,11 +148,29 @@ function sanitizeForLog(value) {
   return value.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\r]/g, '');
 }
 
-// Validate that a file path is within the project directory
+// Resolve the nearest existing ancestor of a path to its real (symlink-free)
+// location. Used so containment checks can't be fooled by a symlink in the
+// path, even when the leaf (e.g. a not-yet-created output file) doesn't exist.
+function realpathNearest(targetPath) {
+  let current = path.resolve(targetPath);
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) break; // reached filesystem root
+    current = parent;
+  }
+  return fs.realpathSync(current);
+}
+
+// Validate that a file path is within the project directory (symlink-aware)
 function isPathWithinProject(filePath) {
-  const resolved = path.resolve(filePath);
-  const projectRoot = path.resolve('.');
-  return resolved.startsWith(projectRoot + path.sep) || resolved === projectRoot;
+  try {
+    const projectRoot = fs.realpathSync(path.resolve('.'));
+    const resolved = fs.realpathSync(path.resolve(filePath));
+    return resolved === projectRoot || resolved.startsWith(projectRoot + path.sep);
+  } catch (e) {
+    // Path does not exist or cannot be resolved — treat as outside.
+    return false;
+  }
 }
 
 function getGitDiff() {
@@ -165,43 +192,64 @@ function getGitDiff() {
 
 function findSourceFiles(baseDir) {
   const files = [];
-  const extensions = ['.js', '.jsx', '.ts', '.tsx', '.py', '.go', '.rs'];
-  
+
   function walkDir(dir) {
     if (!fs.existsSync(dir)) return;
-    
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    
+
+    // Skip unreadable directories (e.g. permission denied) rather than aborting
+    // the whole review — the project-root fallback can reach dirs we can't read.
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (error) {
+      console.warn('Skipping unreadable directory ' + sanitizeForLog(dir) + ': ' + sanitizeForLog(error.message));
+      return;
+    }
+
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
-      
+
       if (entry.name.startsWith('.') || entry.name === 'node_modules') {
         continue;
       }
-      
+
       if (entry.isDirectory()) {
         walkDir(fullPath);
       } else if (entry.isFile()) {
-        const ext = path.extname(entry.name);
-        if (extensions.includes(ext)) {
+        if (isReviewableSourceFile(entry.name)) {
           files.push(fullPath);
         }
       }
     }
   }
-  
+
+  // Prefer src/, but fall back to the whole project when it is absent — otherwise
+  // a project without a src/ directory got an empty review that silently
+  // "passed", and files outside src/ (e.g. tests) were never seen. Mirrors
+  // findFiles() in verify.js.
   const srcDir = path.join(baseDir, 'src');
   if (fs.existsSync(srcDir)) {
+    console.log('Scanning src/ for source files...');
     walkDir(srcDir);
+  } else {
+    console.log('No src/ directory found. Scanning current directory...');
+    walkDir(baseDir);
   }
-  
-  return files;
+
+  return files.sort();
 }
 
 function readFilesContent(filePaths) {
   const contents = [];
 
   for (const filePath of filePaths) {
+    // Enforce the code-only allowlist even for explicit --files input, so a
+    // caller can't pass a .json/.css (or anything else) straight to the model.
+    if (!isReviewableSourceFile(filePath)) {
+      console.warn('Skipping non-code file: ' + sanitizeForLog(filePath));
+      continue;
+    }
+
     // Validate file path stays within project directory before reading
     if (!isPathWithinProject(filePath)) {
       console.warn('Skipping file outside project directory: ' + sanitizeForLog(filePath));
@@ -272,11 +320,14 @@ async function callGemini(prompt, codeContext) {
     const requestOptions = {
       hostname: GEMINI_API_URL,
       port: 443,
-      path: '/v1beta/models/' + GEMINI_MODEL + ':generateContent?key=' + API_KEY,
+      // Pass the API key via header, not the query string, so it can't leak
+      // into request logs, proxy logs, or process listings.
+      path: '/v1beta/models/' + GEMINI_MODEL + ':generateContent',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(requestBody)
+        'Content-Length': Buffer.byteLength(requestBody),
+        'x-goog-api-key': API_KEY
       }
     };
 
@@ -527,9 +578,24 @@ async function main() {
   
   results.summary.passesReview = securityPass && qualityPass;
 
-  // Validate output path stays within project directory
+  // Validate output path stays within project directory (symlink-aware).
+  // If the file already exists, resolve the file itself — it could be a symlink
+  // pointing outside the repo that writeFileSync would follow. Otherwise resolve
+  // the nearest existing ancestor, since the output dir may not exist yet.
   const resolvedOutput = path.resolve(options.outputPath);
-  if (!resolvedOutput.startsWith(path.resolve('.') + path.sep)) {
+  let realProjectRoot;
+  let realOutputTarget;
+  try {
+    realProjectRoot = fs.realpathSync(path.resolve('.'));
+    realOutputTarget = fs.existsSync(resolvedOutput)
+      ? fs.realpathSync(resolvedOutput)
+      : realpathNearest(path.dirname(resolvedOutput));
+  } catch (e) {
+    console.error('ERROR: Could not resolve output path: ' + e.message);
+    process.exit(1);
+  }
+  if (realOutputTarget !== realProjectRoot &&
+      !realOutputTarget.startsWith(realProjectRoot + path.sep)) {
     console.error('ERROR: Output path must be within project directory');
     process.exit(1);
   }
