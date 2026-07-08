@@ -139,11 +139,29 @@ function sanitizeForLog(value) {
   return value.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\r]/g, '');
 }
 
-// Validate that a file path is within the project directory
+// Resolve the nearest existing ancestor of a path to its real (symlink-free)
+// location. Used so containment checks can't be fooled by a symlink in the
+// path, even when the leaf (e.g. a not-yet-created output file) doesn't exist.
+function realpathNearest(targetPath) {
+  let current = path.resolve(targetPath);
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) break; // reached filesystem root
+    current = parent;
+  }
+  return fs.realpathSync(current);
+}
+
+// Validate that a file path is within the project directory (symlink-aware)
 function isPathWithinProject(filePath) {
-  const resolved = path.resolve(filePath);
-  const projectRoot = path.resolve('.');
-  return resolved.startsWith(projectRoot + path.sep) || resolved === projectRoot;
+  try {
+    const projectRoot = fs.realpathSync(path.resolve('.'));
+    const resolved = fs.realpathSync(path.resolve(filePath));
+    return resolved === projectRoot || resolved.startsWith(projectRoot + path.sep);
+  } catch (e) {
+    // Path does not exist or cannot be resolved — treat as outside.
+    return false;
+  }
 }
 
 function getGitDiff() {
@@ -284,11 +302,14 @@ async function callGemini(prompt, codeContext) {
     const requestOptions = {
       hostname: GEMINI_API_URL,
       port: 443,
-      path: '/v1beta/models/' + GEMINI_MODEL + ':generateContent?key=' + API_KEY,
+      // Pass the API key via header, not the query string, so it can't leak
+      // into request logs, proxy logs, or process listings.
+      path: '/v1beta/models/' + GEMINI_MODEL + ':generateContent',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(requestBody)
+        'Content-Length': Buffer.byteLength(requestBody),
+        'x-goog-api-key': API_KEY
       }
     };
 
@@ -539,9 +560,20 @@ async function main() {
   
   results.summary.passesReview = securityPass && qualityPass;
 
-  // Validate output path stays within project directory
+  // Validate output path stays within project directory (symlink-aware).
+  // The output dir may not exist yet, so resolve the nearest existing ancestor.
   const resolvedOutput = path.resolve(options.outputPath);
-  if (!resolvedOutput.startsWith(path.resolve('.') + path.sep)) {
+  let realProjectRoot;
+  let realOutputAncestor;
+  try {
+    realProjectRoot = fs.realpathSync(path.resolve('.'));
+    realOutputAncestor = realpathNearest(path.dirname(resolvedOutput));
+  } catch (e) {
+    console.error('ERROR: Could not resolve output path: ' + e.message);
+    process.exit(1);
+  }
+  if (realOutputAncestor !== realProjectRoot &&
+      !realOutputAncestor.startsWith(realProjectRoot + path.sep)) {
     console.error('ERROR: Output path must be within project directory');
     process.exit(1);
   }

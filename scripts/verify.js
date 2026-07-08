@@ -212,6 +212,21 @@ function readAiResults(resultPath) {
   }
 }
 
+// WHAT: Minimal environment for the ai-review child process.
+// WHY: Don't hand the child every secret in the parent environment. It only
+//      needs PATH (to find git), HOME, and the Gemini key. SystemRoot/TEMP/TMP
+//      are included so Node itself still works on Windows.
+function buildAiChildEnv() {
+  const keys = ['PATH', 'HOME', 'GEMINI_API_KEY', 'SystemRoot', 'TEMP', 'TMP'];
+  const env = {};
+  for (const key of keys) {
+    if (process.env[key] !== undefined) {
+      env[key] = process.env[key];
+    }
+  }
+  return env;
+}
+
 function runAiReview() {
   if (options.skipAiReview) {
     console.log('Skipping AI review (--skip-ai-review)');
@@ -253,7 +268,7 @@ function runAiReview() {
     execFileSync(process.execPath, [aiReviewPath, ...aiArgs], {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env,
+      env: buildAiChildEnv(),
       timeout: 120000 // 2 minute timeout
     });
   } catch (error) {
