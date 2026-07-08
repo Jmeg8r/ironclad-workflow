@@ -31,6 +31,12 @@ const { execSync, execFileSync, spawn } = require('child_process');
 const DEFAULT_EXTENSIONS = ['.js', '.jsx', '.ts', '.tsx', '.css', '.json'];
 const OUTPUT_PATH = '.workflow/state/verify-state.json';
 
+// WHAT: Per-command wall-clock limit and output cap for spawned tools.
+// WHY: Tests/lint/audit had no timeout and could hang the whole verification
+//      indefinitely. Overridable via VERIFY_CMD_TIMEOUT_MS for slow suites.
+const CMD_TIMEOUT_MS = parseInt(process.env.VERIFY_CMD_TIMEOUT_MS, 10) || 300000; // 5 minutes
+const CMD_MAX_BUFFER = 10 * 1024 * 1024; // 10 MB
+
 // Parse command line arguments
 const args = process.argv.slice(2);
 const options = {
@@ -92,16 +98,24 @@ function findFiles(baseDir) {
 function runCommand(command, description) {
   console.log('\n' + description + '...');
   try {
-    const output = execSync(command, { 
+    const output = execSync(command, {
       encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: CMD_TIMEOUT_MS,
+      maxBuffer: CMD_MAX_BUFFER
     });
     return { success: true, output: output.trim() };
   } catch (error) {
-    return { 
-      success: false, 
+    // A timeout kill surfaces as code 'ETIMEDOUT' (or a SIGTERM signal);
+    // make that explicit rather than reporting an empty error.
+    const timedOut = error.code === 'ETIMEDOUT' || error.signal === 'SIGTERM';
+    const message = timedOut
+      ? 'Command timed out after ' + CMD_TIMEOUT_MS + 'ms: ' + command
+      : (error.stderr ? error.stderr.trim() : error.message);
+    return {
+      success: false,
       output: error.stdout ? error.stdout.trim() : '',
-      error: error.stderr ? error.stderr.trim() : error.message
+      error: message
     };
   }
 }
