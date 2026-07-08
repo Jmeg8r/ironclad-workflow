@@ -190,12 +190,20 @@ function findSourceFiles(baseDir) {
     }
   }
   
+  // WHAT: Prefer src/, but fall back to the whole project when it is absent.
+  // WHY: Without the fallback, a project without a src/ directory got an EMPTY
+  //      review that silently "passed", and files outside src/ (e.g. tests)
+  //      were never seen. This mirrors findFiles() in verify.js.
   const srcDir = path.join(baseDir, 'src');
   if (fs.existsSync(srcDir)) {
+    console.log('Scanning src/ for source files...');
     walkDir(srcDir);
+  } else {
+    console.log('No src/ directory found. Scanning current directory...');
+    walkDir(baseDir);
   }
-  
-  return files;
+
+  return files.sort();
 }
 
 function readFilesContent(filePaths) {

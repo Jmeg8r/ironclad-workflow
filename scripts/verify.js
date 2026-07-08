@@ -167,78 +167,95 @@ function runAudit() {
   };
 }
 
+const AI_RESULT_PATH = '.workflow/state/ai-review.json';
+
+// WHAT: Read and normalize ai-review.js output into a summary object.
+// WHY: Returns null when the file is absent or malformed so the caller can
+//      distinguish "no fresh review" from a real verdict (see runAiReview).
+function readAiResults(resultPath) {
+  if (!fs.existsSync(resultPath)) {
+    return null;
+  }
+  try {
+    const aiResults = JSON.parse(fs.readFileSync(resultPath, 'utf-8'));
+    if (!aiResults || !aiResults.summary) {
+      return null;
+    }
+    return {
+      success: aiResults.summary.passesReview,
+      securityRisk: aiResults.summary.securityRisk,
+      codeQuality: aiResults.summary.codeQuality,
+      securityIssues: aiResults.securityReview?.issues?.length || 0,
+      qualityIssues: aiResults.qualityReview?.issues?.length || 0,
+      needsAttention: !aiResults.summary.passesReview
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
 function runAiReview() {
   if (options.skipAiReview) {
     console.log('Skipping AI review (--skip-ai-review)');
     return { skipped: true };
   }
-  
+
   // Check for API key
   if (!process.env.GEMINI_API_KEY) {
     console.log('No GEMINI_API_KEY set, skipping AI review');
     console.log('Set with: export GEMINI_API_KEY="your-key"');
     return { skipped: true, reason: 'no API key' };
   }
-  
+
   // Check if ai-review.js exists
   const aiReviewPath = path.join(__dirname, 'ai-review.js');
   if (!fs.existsSync(aiReviewPath)) {
     console.log('AI review script not found');
     return { skipped: true, reason: 'script not found' };
   }
-  
+
+  // WHAT: Delete any prior review result before running.
+  // WHY: ai-review.js can exit 0 without writing a file (e.g. "no code found
+  //      to review"). Without this, verify.js would read a STALE result from a
+  //      previous run and misattribute it to the current code.
+  try {
+    if (fs.existsSync(AI_RESULT_PATH)) {
+      fs.unlinkSync(AI_RESULT_PATH);
+    }
+  } catch (e) {
+    console.warn('Warning: could not clear previous AI review result: ' + e.message);
+  }
+
   console.log('\nRunning AI Code Review (Gemini)...');
-  
+
+  let spawnError = null;
   try {
     const aiArgs = options.securityFocus ? ['--security-focus'] : [];
     // Use execFileSync to avoid shell interpretation of the path
-    const result = execFileSync(process.execPath, [aiReviewPath, ...aiArgs], {
+    execFileSync(process.execPath, [aiReviewPath, ...aiArgs], {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
       env: process.env,
       timeout: 120000 // 2 minute timeout
     });
-    
-    // Read the AI review results
-    const aiResultPath = '.workflow/state/ai-review.json';
-    if (fs.existsSync(aiResultPath)) {
-      const aiResults = JSON.parse(fs.readFileSync(aiResultPath, 'utf-8'));
-      return {
-        success: aiResults.summary.passesReview,
-        securityRisk: aiResults.summary.securityRisk,
-        codeQuality: aiResults.summary.codeQuality,
-        securityIssues: aiResults.securityReview?.issues?.length || 0,
-        qualityIssues: aiResults.qualityReview?.issues?.length || 0
-      };
-    }
-    
-    return { success: true, output: result };
   } catch (error) {
+    // ai-review.js exits non-zero when it finds issues that need attention;
+    // that is expected, not a spawn failure. Distinguish below by whether a
+    // fresh result file was written.
+    spawnError = error;
     console.log('AI review completed with findings');
-    
-    // Still try to read results even if exit code was non-zero
-    const aiResultPath = '.workflow/state/ai-review.json';
-    if (fs.existsSync(aiResultPath)) {
-      try {
-        const aiResults = JSON.parse(fs.readFileSync(aiResultPath, 'utf-8'));
-        return {
-          success: aiResults.summary.passesReview,
-          securityRisk: aiResults.summary.securityRisk,
-          codeQuality: aiResults.summary.codeQuality,
-          securityIssues: aiResults.securityReview?.issues?.length || 0,
-          qualityIssues: aiResults.qualityReview?.issues?.length || 0,
-          needsAttention: !aiResults.summary.passesReview
-        };
-      } catch (e) {
-        // Ignore parse errors
-      }
-    }
-    
-    return {
-      success: false,
-      error: error.message
-    };
   }
+
+  const results = readAiResults(AI_RESULT_PATH);
+  if (results) {
+    return results;
+  }
+
+  // No fresh result file was written. Do NOT fall back to stale data.
+  if (spawnError) {
+    return { success: false, error: spawnError.message, reason: 'ai-review produced no output' };
+  }
+  return { skipped: true, reason: 'no review output' };
 }
 
 // Main verification process
