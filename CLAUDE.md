@@ -72,7 +72,10 @@ ironclad-workflow/
 - Scripts use only Node.js built-in modules (`crypto`, `fs`, `path`, `https`, `child_process`)
 - All file hashing uses SHA256
 - AI review uses Gemini 2.5 Flash with temperature 0.2
-- File extensions scanned: `.js`, `.jsx`, `.ts`, `.tsx`, `.css`, `.json`
+- Extensions **hashed** for integrity (`verify.js`): `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs`, `.css`, `.json`
+- Extensions **sent to AI review** (`ai-review.js`): `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs`, `.py`, `.go`, `.rs` (code only — no `.css`/`.json`)
+- Both scan `src/` if present, otherwise fall back to the project root
+- Subprocess commands (test/lint/audit) time out after `VERIFY_CMD_TIMEOUT_MS` (default 300000 ms)
 
 ---
 

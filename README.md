@@ -4,7 +4,7 @@ A structured 4-phase workflow framework that enforces quality through planning g
 
 ## Philosophy
 
-Inspired by [Claudikins Kernel](https://github.com/elb-pr/claudikins-kernel) and adapted for Cursor, this workflow ensures:
+Inspired by [Claudikins Kernel](https://github.com/elb-pr/claudikins-kernel), this workflow ensures:
 
 - **Nothing ships without a plan** - Forced design before coding
 - **Nothing ships unreviewed** - AI-powered code review using Google Gemini
@@ -139,7 +139,6 @@ AI review results are saved to `.workflow/state/ai-review.json`:
 ```bash
 # Copy the workflow files to your project
 cp -r ironclad-workflow/.workflow your-project/
-cp -r ironclad-workflow/.cursor your-project/
 cp -r ironclad-workflow/scripts your-project/
 ```
 
@@ -179,8 +178,6 @@ node scripts/ship.js --create-pr
 
 ```
 your-project/
-├── .cursor/
-│   └── rules                    # Cursor rules enforcing workflow
 ├── .workflow/
 │   ├── templates/               # Document templates (don't modify)
 │   │   ├── plan-template.md
@@ -298,8 +295,11 @@ AI review categorizes findings by severity:
 Edit `scripts/ai-review.js` to change which files are reviewed:
 
 ```javascript
-const extensions = ['.js', '.jsx', '.ts', '.tsx', '.py', '.go', '.rs'];
+const extensions = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.py', '.go', '.rs'];
 ```
+
+Both scripts scan `src/` when it exists and otherwise fall back to the project
+root, so a project laid out without a `src/` directory is still reviewed.
 
 ### Add Project-Specific Review Criteria
 
@@ -321,7 +321,8 @@ Modify the review prompts in `ai-review.js` to include project-specific concerns
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GEMINI_API_KEY` | For AI review | Google Gemini API key |
+| `GEMINI_API_KEY` | For AI review | Google Gemini API key (sent via the `x-goog-api-key` header) |
+| `VERIFY_CMD_TIMEOUT_MS` | No | Per-command timeout for test/lint/audit (default `300000`) |
 
 ## License
 
