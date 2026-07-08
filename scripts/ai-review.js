@@ -165,7 +165,11 @@ function getGitDiff() {
 
 function findSourceFiles(baseDir) {
   const files = [];
-  const extensions = ['.js', '.jsx', '.ts', '.tsx', '.py', '.go', '.rs'];
+  // WHAT: Extensions sent to the AI reviewer.
+  // WHY: Code only — deliberately excludes the .css/.json that verify.js hashes
+  //      (those add little to a security/quality review) and adds other source
+  //      languages (.py/.go/.rs) the model can still reason about.
+  const extensions = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.py', '.go', '.rs'];
   
   function walkDir(dir) {
     if (!fs.existsSync(dir)) return;

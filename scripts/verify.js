@@ -28,7 +28,11 @@ const path = require('path');
 const { execSync, execFileSync, spawn } = require('child_process');
 
 // Configuration
-const DEFAULT_EXTENSIONS = ['.js', '.jsx', '.ts', '.tsx', '.css', '.json'];
+// WHAT: Extensions hashed for integrity tracking.
+// WHY: Broader than the AI-review set (ai-review.js) on purpose — hashing
+//      guards ALL source + asset files that shipping depends on (incl. .css
+//      and .json), whereas AI review only sends actual code to the model.
+const DEFAULT_EXTENSIONS = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.css', '.json'];
 const OUTPUT_PATH = '.workflow/state/verify-state.json';
 
 // WHAT: Per-command wall-clock limit and output cap for spawned tools.
