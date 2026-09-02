@@ -102,6 +102,12 @@ function findFiles(baseDir) {
 function runCommand(command, description) {
   console.log('\n' + description + '...');
   try {
+    // WHY suppressed rather than fixed: `command` is a parameter, which is the shape the
+    // rule matches — but every caller in this file passes a STRING LITERAL ('git branch --show-current', 'npm test 2>&1', and so on); process.argv is read only
+    // for boolean flags and never interpolated, and a repo-wide grep for template-literal
+    // or concatenated command strings returns nothing.
+    // Re-read this before adding a caller that builds its command from input.
+    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process
     const output = execSync(command, {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
