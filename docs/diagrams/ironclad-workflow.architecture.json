@@ -1,0 +1,298 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ironclad-workflow \u2014 PLAN, EXECUTE, VERIFY, SHIP",
+    "output": "ironclad-workflow.architecture.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "verify",
+        "label": "VERIFY",
+        "focus": [
+          "dev",
+          "verify",
+          "npm",
+          "review",
+          "gemini",
+          "aistate",
+          "vstate"
+        ],
+        "note": "verify.js hashes files, runs npm test/lint/audit, spawns ai-review.js and writes verify-state.json."
+      },
+      {
+        "id": "ship",
+        "label": "SHIP",
+        "focus": [
+          "vstate",
+          "ship",
+          "gh"
+        ],
+        "note": "ship.js re-hashes every recorded file, checks the gates, and with --create-pr calls gh pr create."
+      },
+      {
+        "id": "plan",
+        "label": "PLAN / EXECUTE",
+        "focus": [
+          "dev",
+          "sessions"
+        ],
+        "note": "Plans and session notes are markdown from .workflow/templates; approval is a human checkpoint, not a script."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "sessions",
+      "type": "frontend",
+      "label": "Session docs",
+      "sublabel": "plan.md, session.md",
+      "pos": [
+        40,
+        80
+      ],
+      "size": [
+        140,
+        60
+      ],
+      "tag": "templates"
+    },
+    {
+      "id": "dev",
+      "type": "external",
+      "label": "Developer",
+      "sublabel": "human checkpoints",
+      "pos": [
+        40,
+        220
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "verify",
+      "type": "backend",
+      "label": "verify.js",
+      "sublabel": "hashes + gates",
+      "pos": [
+        250,
+        220
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "npm",
+      "type": "external",
+      "label": "npm scripts",
+      "sublabel": "test, lint, audit",
+      "pos": [
+        250,
+        360
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "review",
+      "type": "backend",
+      "label": "ai-review.js",
+      "sublabel": "security + quality",
+      "pos": [
+        460,
+        220
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "aistate",
+      "type": "database",
+      "label": "ai-review.json",
+      "sublabel": ".workflow/state",
+      "pos": [
+        460,
+        80
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "gemini",
+      "type": "external",
+      "label": "Gemini API",
+      "sublabel": "gemini-2.5-flash",
+      "pos": [
+        670,
+        220
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "vstate",
+      "type": "database",
+      "label": "verify-state.json",
+      "sublabel": ".workflow/state",
+      "pos": [
+        460,
+        360
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "ship",
+      "type": "security",
+      "label": "ship.js",
+      "sublabel": "integrity check",
+      "pos": [
+        670,
+        360
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "gh",
+      "type": "external",
+      "label": "gh CLI",
+      "sublabel": "pr create",
+      "pos": [
+        880,
+        360
+      ],
+      "size": [
+        140,
+        60
+      ],
+      "tag": "optional"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "Ship gate",
+      "wraps": [
+        "vstate",
+        "ship"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "dev-sessions",
+      "from": "dev",
+      "to": "sessions",
+      "label": "plan",
+      "variant": "dashed"
+    },
+    {
+      "id": "dev-verify",
+      "from": "dev",
+      "to": "verify",
+      "variant": "emphasis"
+    },
+    {
+      "id": "verify-npm",
+      "from": "verify",
+      "to": "npm",
+      "label": "run",
+      "labelDy": 24
+    },
+    {
+      "id": "verify-review",
+      "from": "verify",
+      "to": "review",
+      "label": "spawn",
+      "variant": "emphasis"
+    },
+    {
+      "id": "review-gemini",
+      "from": "review",
+      "to": "gemini",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "id": "review-aistate",
+      "from": "review",
+      "to": "aistate",
+      "label": "write"
+    },
+    {
+      "id": "verify-vstate",
+      "from": "verify",
+      "to": "vstate",
+      "label": "write"
+    },
+    {
+      "id": "vstate-ship",
+      "from": "vstate",
+      "to": "ship",
+      "label": "read",
+      "variant": "security"
+    },
+    {
+      "id": "ship-gh",
+      "from": "ship",
+      "to": "gh",
+      "label": "--create-pr",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "verify.js",
+      "items": [
+        "SHA-256 of files under src/ (or project root)",
+        "npm test, npm run lint, npm audit --json",
+        "Exit code follows overallPass"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "ai-review.js",
+      "items": [
+        "Only code extensions are sent",
+        "--diff reviews git diff HEAD",
+        "Key sent as x-goog-api-key header"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "ship.js",
+      "items": [
+        "Fails on any modified or missing file",
+        "Fails if a recorded gate did not pass",
+        "Refuses a PR from the default branch"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Human checkpoints",
+      "items": [
+        "Plan approval before coding",
+        "Verify approval after review",
+        "Merge decision stays with a human"
+      ]
+    }
+  ]
+}
