@@ -142,6 +142,9 @@ cp -r ironclad-workflow/.workflow your-project/
 cp -r ironclad-workflow/scripts your-project/
 ```
 
+`verify.js` runs `npm test`, `npm run lint` and `npm audit --json`, so the target project needs a
+`package.json` with `test` and `lint` scripts (use `--skip-tests` / `--skip-lint` otherwise).
+
 ### 2. Set Up API Key
 
 ```bash
@@ -243,9 +246,40 @@ Validates file integrity and prepares for shipping:
 node scripts/ship.js [options]
 
 Options:
-  --create-pr     Create a GitHub PR (requires gh CLI)
-  --dry-run       Show what would be done
+  --create-pr       Create a GitHub PR (requires gh CLI; refuses to run on the default branch)
+  --dry-run         Show what would be done
+  --state <path>    Path to verify-state.json (default .workflow/state/verify-state.json)
 ```
+
+`ship.js` exits non-zero unless every gate recorded by `verify.js` passed (tests, lint, audit with
+no high or critical findings, AI review) and every hashed file still matches its SHA-256.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    Dev["Developer + AI assistant"] -->|"PLAN / EXECUTE"| Docs[".workflow/sessions/<br/>plan.md, session.md"]
+    Dev -->|"node scripts/verify.js"| Verify["verify.js"]
+    Verify -->|"npm test, npm run lint,<br/>npm audit --json"| NPM["Project npm scripts"]
+    Verify -->|"spawns"| Review["ai-review.js"]
+    Review -->|"generateContent"| Gemini["Google Gemini API"]
+    Review --> AIState[".workflow/state/ai-review.json"]
+    Verify -->|"SHA-256 hashes + gate results"| State[".workflow/state/verify-state.json"]
+    Dev -->|"node scripts/ship.js"| Ship["ship.js"]
+    State --> Ship
+    Ship -->|"--create-pr"| GH["gh pr create"]
+```
+
+A rendered diagram is in [`docs/diagrams/ironclad-workflow.architecture.svg`](docs/diagrams/ironclad-workflow.architecture.svg)
+(source: `docs/diagrams/ironclad-workflow.architecture.json`).
+
+## Example project
+
+`test-project/` is a small example project with its own (older) copy of the scripts and a
+`.workflow/` folder. Its `package.json` wires `npm test` to a calculator test, `npm run lint` to a
+placeholder, and `npm run verify` / `npm run ship` to the scripts in the repo root's `scripts/`.
+The copies in `test-project/scripts/` lag behind the root scripts (for example, no command timeout),
+so treat the root `scripts/` as the source of truth.
 
 ## Security Features
 
@@ -295,8 +329,10 @@ AI review categorizes findings by severity:
 Edit `scripts/ai-review.js` to change which files are reviewed:
 
 ```javascript
-const extensions = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.py', '.go', '.rs'];
+const REVIEWABLE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.py', '.go', '.rs']);
 ```
+
+The same allow-list applies to files passed with `--files`, so other file types are never sent to the model.
 
 Both scripts scan `src/` when it exists and otherwise fall back to the project
 root, so a project laid out without a `src/` directory is still reviewed.
@@ -321,7 +357,7 @@ Modify the review prompts in `ai-review.js` to include project-specific concerns
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GEMINI_API_KEY` | For AI review | Google Gemini API key (sent via the `x-goog-api-key` header) |
+| `GEMINI_API_KEY` | For AI review | Google Gemini API key (sent via the `x-goog-api-key` header; model `gemini-2.5-flash`) |
 | `VERIFY_CMD_TIMEOUT_MS` | No | Per-command timeout for test/lint/audit (default `300000`) |
 
 ## License
