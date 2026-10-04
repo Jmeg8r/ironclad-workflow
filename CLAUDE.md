@@ -1,99 +1,53 @@
 # Ironclad Workflow
 
+Global conventions in `~/.claude/CLAUDE.md` still apply. This file adds project rules.
+
 ## Project Overview
 
 A structured 4-phase development workflow framework (`PLAN → EXECUTE → VERIFY → SHIP`)
-that enforces quality gates, AI-powered code review via Google Gemini, and file integrity
-tracking. Inspired by Claudikins Kernel, designed as an editor-agnostic workflow.
+that enforces quality gates, AI-powered code review via Google Gemini, and file
+integrity tracking. Inspired by Claudikins Kernel, designed as an editor-agnostic
+workflow, meant to be adopted into other projects.
 
-**Type:** Developer tooling / workflow framework (meant to be adopted into other projects)
-**Language:** JavaScript (Node.js)
-**Dependencies:** None (zero external packages — pure Node.js)
-**Version:** 1.1.0
-**License:** MIT
+**Type/Language/Deps/Version/License:** Developer tooling, Node.js, zero external
+packages, v1.1.0, MIT — see `package.json` / `LICENSE` for the authoritative copy.
 
 ---
 
 ## Tech Stack
 
-- **Runtime:** Node.js (no minimum version specified, uses native `crypto`, `fs`, `path`, `https`)
-- **AI Integration:** Google Gemini 2.5 Flash API (for code review)
-- **CLI Tooling:** GitHub CLI (`gh`) for PR creation in ship phase
-- **IDE Integration:** Editor CLAUDE.md files (project-specific context)
-
----
-
-## Project Structure
-
-```
-ironclad-workflow/
-├── .workflow/
-│   ├── checklists/            # Security + verification checklists
-│   ├── templates/             # Plan, session, PR templates
-│   └── state/                 # Runtime verification state (generated)
-├── scripts/
-│   ├── verify.js              # Full verification pipeline
-│   ├── ai-review.js           # Standalone Gemini AI review
-│   └── ship.js                # File integrity + PR creation
-├── test-project/              # Example project demonstrating the workflow
-├── package.json               # npm scripts (no dependencies)
-├── .env.example               # Required environment variables
-├── CLAUDE.md                  # Project-specific workflow context
-└── README.md                  # Full documentation
-```
+Node.js + Google Gemini 2.5 Flash (AI code review) + GitHub CLI (`gh`, PR creation in
+ship phase). Full structure in `README.md`; scripts in `package.json`.
 
 ---
 
 ## Key Scripts
 
-| Command | What It Does |
-|---------|--------------|
-| `npm run verify` | Full verification: tests + lint + audit + AI review + file hashing |
-| `npm run verify:no-ai` | Verification without AI review |
-| `npm run ai-review` | Standalone AI code review |
-| `npm run ai-review:security` | Security-focused AI review only |
-| `npm run ai-review:diff` | AI review of git diff only |
-| `npm run ship` | Validate file integrity against verification state |
-| `npm run ship:pr` | Validate integrity + create GitHub PR |
-
----
-
-## Environment Variables
-
-| Variable | Required | Purpose |
-|----------|----------|---------|
-| `GEMINI_API_KEY` | For AI review | Google Gemini API key |
+See `package.json` scripts: `verify` / `verify:no-ai`, `ai-review` (`:security` /
+`:diff` variants), `ship`, `ship:pr`. Required env var: `GEMINI_API_KEY` (`.env.example`).
 
 ---
 
 ## Development Conventions
 
-- Zero-dependency design — do not add npm packages
-- Scripts use only Node.js built-in modules (`crypto`, `fs`, `path`, `https`, `child_process`)
-- All file hashing uses SHA256
-- AI review uses Gemini 2.5 Flash with temperature 0.2
-- Extensions **hashed** for integrity (`verify.js`): `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs`, `.css`, `.json`
-- Extensions **sent to AI review** (`ai-review.js`): `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs`, `.py`, `.go`, `.rs` (code only — no `.css`/`.json`)
-- Both scan `src/` if present, otherwise fall back to the project root
-- Subprocess commands (test/lint/audit) time out after `VERIFY_CMD_TIMEOUT_MS` (default 300000 ms)
+- Zero-dependency design — do not add npm packages. Scripts use only Node.js
+  built-in modules (`crypto`, `fs`, `path`, `https`, `child_process`)
+- Both `verify.js` and `ai-review.js` scan `src/` if present, otherwise fall back
+  to the project root
+- Subprocess commands (test/lint/audit) time out after `VERIFY_CMD_TIMEOUT_MS`
+  (default 300000 ms)
 
 ---
 
 ## Workflow Phases
 
-1. **PLAN** — Create plan from template, get human approval
-2. **EXECUTE** — Feature branch, implement tasks, session docs
-3. **VERIFY** — `node scripts/verify.js` (tests, lint, audit, AI review, hashing)
-4. **SHIP** — `node scripts/ship.js` (integrity check, PR creation)
-
-Three mandatory human approval gates: after PLAN, after VERIFY, after SHIP.
+Implements the Ironclad 4-phase workflow — see global `~/.claude/CLAUDE.md` — via
+`node scripts/verify.js` (VERIFY) and `node scripts/ship.js` (SHIP). Three
+mandatory human approval gates: after PLAN, after VERIFY, after SHIP.
 
 ---
 
 ## Working With This Project
 
-- The `test-project/` directory is a working example — it has its own `package.json`,
-  source, tests, and a completed verification state
 - Templates in `.workflow/templates/` are meant to be copied, not edited in place
 - State files in `.workflow/state/` are generated by scripts — don't hand-edit them
-- The workflow is enforced via scripts and documentation, not tied to any specific editor
