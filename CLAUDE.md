@@ -16,7 +16,7 @@ tracking. Inspired by Claudikins Kernel, designed as an editor-agnostic workflow
 
 ## Tech Stack
 
-- **Runtime:** Node.js (no minimum version specified, uses native `crypto`, `fs`, `path`, `https`)
+- **Runtime:** Node.js (`engines.node` >=16 in package.json, CI runs Node 20; uses native `crypto`, `fs`, `path`, `https`)
 - **AI Integration:** Google Gemini 2.5 Flash API (for code review)
 - **CLI Tooling:** GitHub CLI (`gh`) for PR creation in ship phase
 - **IDE Integration:** Editor CLAUDE.md files (project-specific context)
@@ -35,6 +35,8 @@ ironclad-workflow/
 │   ├── verify.js              # Full verification pipeline
 │   ├── ai-review.js           # Standalone Gemini AI review
 │   └── ship.js                # File integrity + PR creation
+├── docs/diagrams/             # Archify architecture map (json IR, html, svg)
+├── .github/                   # CI, CONTRIBUTING, branch protection docs
 ├── test-project/              # Example project demonstrating the workflow
 ├── package.json               # npm scripts (no dependencies)
 ├── .env.example               # Required environment variables

@@ -248,10 +248,9 @@ node scripts/ship.js [options]
 Options:
   --create-pr       Create a GitHub PR (requires gh CLI; refuses to run on the default branch)
   --dry-run         Show what would be done
-  --state <path>    Path to verify-state.json (default .workflow/state/verify-state.json)
 ```
 
-`ship.js` exits non-zero unless every gate recorded by `verify.js` passed (tests, lint, audit with
+`ship.js` reads `.workflow/state/verify-state.json` and exits non-zero unless every gate recorded by `verify.js` passed (tests, lint, audit with
 no high or critical findings, AI review) and every hashed file still matches its SHA-256.
 
 ## Architecture
@@ -270,8 +269,15 @@ flowchart TD
     Ship -->|"--create-pr"| GH["gh pr create"]
 ```
 
-A rendered diagram is in [`docs/diagrams/ironclad-workflow.architecture.svg`](docs/diagrams/ironclad-workflow.architecture.svg)
-(source: `docs/diagrams/ironclad-workflow.architecture.json`).
+<!-- archify:begin -->
+### System map
+
+![System map](docs/diagrams/ironclad-workflow.architecture.svg)
+
+Interactive: [`docs/diagrams/ironclad-workflow.architecture.html`](docs/diagrams/ironclad-workflow.architecture.html)
+— search, trace routes, compare roles. Source of truth is the typed IR
+[`ironclad-workflow.architecture.json`](docs/diagrams/ironclad-workflow.architecture.json); edit that, never the HTML.
+<!-- archify:end -->
 
 ## Example project
 
